@@ -1028,6 +1028,10 @@ void prepare_playlist(struct MPContext *mpctx, struct playlist *pl)
     if (!pl->current)
         pl->current = mp_check_playlist_resume(mpctx, pl);
 
+    if (pl->current) {
+        MP_WARN(mpctx, "Play_start %f\n", opts->play_start.pos);
+    }
+
     if (!pl->current)
         pl->current = playlist_get_first(pl);
 }

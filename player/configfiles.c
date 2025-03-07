@@ -327,6 +327,10 @@ void mp_write_watch_later_conf(struct MPContext *mpctx)
     int pl_index = cur->original_index == -1 ? cur->pl_index : cur->original_index;
     if (cur->playlist_path) {
         pl_path = mp_normalize_path(ctx, cur->playlist_path);
+        MP_WARN(mpctx, "Playlist-path `%s`\n", pl_path);
+        MP_WARN(mpctx, "Playlist-orig-index `%i`\n", cur->original_index);
+        MP_WARN(mpctx, "Playlist-index `%i`\n", cur->pl_index);
+        MP_WARN(mpctx, "Resolved Playlist-index `%i`\n", pl_index);
         if (!pl_path) {
             goto exit;
         }
@@ -343,6 +347,8 @@ void mp_write_watch_later_conf(struct MPContext *mpctx)
     mp_mkdirp(wl_dir);
 
     MP_INFO(mpctx, "Saving state.\n");
+    MP_WARN(mpctx, "Playlist WL `%s`\n", conffile);
+    MP_WARN(mpctx, "Playlist WL dir `%s`\n", wl_dir);
 
     FILE *file = fopen(conffile, "wb");
     if (!file) {
@@ -420,8 +426,10 @@ void mp_delete_watch_later_conf(struct MPContext *mpctx, const char *file)
     // It will be deleted after file position is resumed
     char *playlist = mpctx->playing ? mpctx->playing->playlist_path : NULL;
     if (mpctx->playlist && !playlist && !mpctx->playlist->playlist_started) {
+        MP_WARN(mpctx, "Not deleting WL for %s\n", file);
         return;
     }
+    MP_WARN(mpctx, "Deleting WL for %s\n", file);
 
     char *path = mp_normalize_path(NULL, file ? file : mpctx->filename);
     if (!path)
@@ -455,6 +463,7 @@ exit:
 
 bool mp_load_playback_resume(struct MPContext *mpctx, const char *file)
 {
+    MP_WARN(mpctx, "Resume File `%s`\n", file);
     bool resume = false;
     if (!mpctx->opts->position_resume)
         return resume;
@@ -476,17 +485,21 @@ bool mp_load_playback_resume(struct MPContext *mpctx, const char *file)
     // All watch-later-options will be shared within a playlist.
     if (playlist) {
         fname = mp_get_playback_resume_config_filename(mpctx, playlist);
+        MP_WARN(mpctx, "Resume Playlist WL `%s`\n", fname);
     } else {
         fname = mp_get_playback_resume_config_filename(mpctx, file);
+        MP_WARN(mpctx, "Resume File WL `%s`\n", fname);
     }
 
     if (fname && mp_path_exists(fname)) {
         if (mpctx->opts->position_check_mtime &&
             !mp_is_url(bstr0(file)) && !check_mtime(file, fname) && !playlist)
         {
+            MP_WARN(mpctx, "Mtime it\n");
             talloc_free(fname);
             return resume;
         }
+        MP_WARN(mpctx, "In it\n");
 
         // Never apply the saved start position to following files
         m_config_backup_opt(mpctx->mconfig, "start");
@@ -504,6 +517,7 @@ bool mp_load_playback_resume(struct MPContext *mpctx, const char *file)
         }
         resume = true;
     }
+    MP_WARN(mpctx, "End it\n");
     talloc_free(fname);
     return resume;
 }
@@ -518,6 +532,7 @@ struct playlist_entry *mp_check_playlist_resume(struct MPContext *mpctx,
 {
     if (!mpctx->opts->position_resume)
         return NULL;
+    MP_WARN(mpctx, "mp_check_playlist_resume\n");
     for (int n = 0; n < playlist->num_entries; n++) {
         struct playlist_entry *e = playlist->entries[n];
         char *conf = mp_get_playback_resume_config_filename(mpctx, e->filename);
@@ -526,5 +541,6 @@ struct playlist_entry *mp_check_playlist_resume(struct MPContext *mpctx,
         if (exists)
             return e;
     }
+    MP_WARN(mpctx, "mp_check_playlist_resume BAD\n");
     return NULL;
 }
