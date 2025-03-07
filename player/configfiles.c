@@ -307,6 +307,9 @@ void mp_write_watch_later_conf(struct MPContext *mpctx)
     struct playlist_entry *cur = mpctx->playing;
     char *conffile = NULL;
     void *ctx = talloc_new(NULL);
+    // Whether to save a playlist resume or a file resume
+    // TODO: Add option to control this
+    bool save_playlist = false;
 
     if (!cur)
         goto exit;
@@ -315,9 +318,21 @@ void mp_write_watch_later_conf(struct MPContext *mpctx)
     if (!path)
         goto exit;
 
+    // Path to the playlist
+    char *pl_path = NULL;
+    // Index into the playlist, save by index
+    int pl_index = cur->original_index == -1 ? cur->pl_index : cur->original_index;
+    if (cur->playlist_path) {
+        pl_path = mp_normalize_path(ctx, cur->playlist_path);
+        if (!pl_path) {
+            goto exit;
+        }
+        save_playlist = true;
+    }
+
     struct demuxer *demux = mpctx->demuxer;
 
-    conffile = mp_get_playback_resume_config_filename(mpctx, path);
+    conffile = mp_get_playback_resume_config_filename(mpctx, save_playlist ? pl_path : path);
     if (!conffile)
         goto exit;
 
@@ -332,7 +347,11 @@ void mp_write_watch_later_conf(struct MPContext *mpctx)
         goto exit;
     }
 
-    write_filename(mpctx, file, path);
+    write_filename(mpctx, file, save_playlist ? pl_path : path);
+
+    if (save_playlist) {
+        fprintf(file, "playlist-start=%i\n", pl_index);
+    }
 
     bool write_start = true;
     double pos = get_playback_time(mpctx);
@@ -366,14 +385,14 @@ void mp_write_watch_later_conf(struct MPContext *mpctx)
     }
     fclose(file);
 
-    if (mpctx->opts->position_check_mtime && !mp_is_url(bstr0(path)) &&
-        !copy_mtime(path, conffile))
+    if (mpctx->opts->position_check_mtime && !mp_is_url(bstr0(save_playlist ? pl_path : path)) &&
+        !copy_mtime(save_playlist ? pl_path : path, conffile))
     {
         MP_WARN(mpctx, "Can't copy mtime from %s to %s\n", cur->filename,
                 conffile);
     }
 
-    write_redirects_for_parent_dirs(mpctx, path);
+    write_redirects_for_parent_dirs(mpctx, save_playlist ? pl_path : path);
 
     // Also write redirect entries for a playlist that mpv expanded if the
     // current entry is a URL, this is mostly useful for playing multiple
@@ -393,6 +412,14 @@ exit:
 
 void mp_delete_watch_later_conf(struct MPContext *mpctx, const char *file)
 {
+    // If we are loading a playlist, but not yet playing it,
+    // do not delete its WL *yet*.
+    // It will be deleted after file position is resumed
+    char *playlist = mpctx->playing ? mpctx->playing->playlist_path : NULL;
+    if (mpctx->playlist && !playlist) {
+        return;
+    }
+
     void *ctx = talloc_new(NULL);
     char *path = mp_normalize_path(ctx, file ? file : mpctx->filename);
     if (!path)
@@ -428,10 +455,31 @@ bool mp_load_playback_resume(struct MPContext *mpctx, const char *file)
     bool resume = false;
     if (!mpctx->opts->position_resume)
         return resume;
-    char *fname = mp_get_playback_resume_config_filename(mpctx, file);
+    char *playlist = mpctx->playing ? mpctx->playing->playlist_path : NULL;
+    char *fname = NULL;
+
+    // This function will be called twice when loading a playlist,
+    // first with `file` as the playlist and nothing playing,
+    // and secondly after the playlist has been expanded,
+    // with `file` as the saved playlist entry.
+    //
+    // The first case will load the playlist and `playlist-start`,
+    // starting us at the right video/index within a playlist.
+    //
+    // In the second case, we want to load the playlist resume file
+    // instead of the individual file's resume file,
+    // and then use it for any watch-later-options, including `start`.
+    // This handles position within the video at the previously loaded index.
+    // All watch-later-options will be shared within a playlist.
+    if (playlist) {
+        fname = mp_get_playback_resume_config_filename(mpctx, playlist);
+    } else {
+        fname = mp_get_playback_resume_config_filename(mpctx, file);
+    }
+
     if (fname && mp_path_exists(fname)) {
         if (mpctx->opts->position_check_mtime &&
-            !mp_is_url(bstr0(file)) && !check_mtime(file, fname))
+            !mp_is_url(bstr0(file)) && !check_mtime(file, fname) && !playlist)
         {
             talloc_free(fname);
             return resume;
@@ -439,9 +487,18 @@ bool mp_load_playback_resume(struct MPContext *mpctx, const char *file)
 
         // Never apply the saved start position to following files
         m_config_backup_opt(mpctx->mconfig, "start");
-        MP_INFO(mpctx, "Resuming playback. This behavior can "
-               "be disabled with --no-resume-playback.\n");
+        // Never apply the saved playlist-start position to following playlists
+        m_config_backup_opt(mpctx->mconfig, "playlist-start");
+        // To prevent duplicate messages
+        if (!playlist) {
+            MP_INFO(mpctx, "Resuming playback. This behavior can "
+                "be disabled with --no-resume-playback.\n");
+        }
         try_load_config(mpctx, fname, M_SETOPT_PRESERVE_CMDLINE, MSGL_V);
+
+        if (playlist) {
+            mp_delete_watch_later_conf(mpctx, playlist);
+        }
         resume = true;
     }
     talloc_free(fname);
@@ -468,4 +525,3 @@ struct playlist_entry *mp_check_playlist_resume(struct MPContext *mpctx,
     }
     return NULL;
 }
-
