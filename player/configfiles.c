@@ -419,7 +419,7 @@ void mp_delete_watch_later_conf(struct MPContext *mpctx, const char *file)
     // do not delete its WL *yet*.
     // It will be deleted after file position is resumed
     char *playlist = mpctx->playing ? mpctx->playing->playlist_path : NULL;
-    if (mpctx->playlist && !playlist) {
+    if (mpctx->playlist && !playlist && !mpctx->playlist->playlist_started) {
         return;
     }
 
