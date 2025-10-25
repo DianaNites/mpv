@@ -595,7 +595,7 @@ struct track *select_default_track(struct MPContext *mpctx, int order,
             continue;
         if (sub) {
             // Subtitle specific auto-selecting crap.
-            bool audio_matches = audio_lang && track->lang && !strcasecmp(audio_lang, track->lang);
+            bool audio_matches = mp_match_lang((char *[]){ (char *)audio_lang, NULL }, track->lang) > 0;
             bool forced = track->forced_track && (opts->subs_fallback_forced == 2 ||
                           (audio_matches && opts->subs_fallback_forced == 1));
             bool lang_match = !os_langs && mp_match_lang(langs, track->lang) > 0;
@@ -826,7 +826,7 @@ bool mp_remove_track(struct MPContext *mpctx, struct track *track)
 // the demuxer is changed to be slaved to mpctx->playback_abort instead.
 int mp_add_external_file(struct MPContext *mpctx, char *filename,
                          enum stream_type filter, struct mp_cancel *cancel,
-                         bool cover_art)
+                         enum track_flags flags)
 {
     struct MPOpts *opts = mpctx->opts;
     if (!filename || mp_cancel_test(cancel))
@@ -915,8 +915,12 @@ int mp_add_external_file(struct MPContext *mpctx, char *filename,
         t->external_filename = mp_normalize_user_path(t, mpctx->global, filename);
         t->no_default = sh->type != filter;
         t->no_auto_select = t->no_default;
+        t->hearing_impaired_track = flags & TRACK_HEARING_IMPAIRED;
+        t->visual_impaired_track = flags & TRACK_VISUAL_IMPAIRED;
+        t->forced_track = flags & TRACK_FORCED;
+        t->default_track = flags & TRACK_DEFAULT;
         // if we found video, and we are loading cover art, flag as such.
-        t->attached_picture = t->type == STREAM_VIDEO && cover_art;
+        t->attached_picture = t->type == STREAM_VIDEO && (flags & TRACK_ATTACHED_PICTURE);
         if (first_num < 0 && (filter == STREAM_TYPE_COUNT || sh->type == filter))
             first_num = mpctx->num_tracks - 1;
     }
@@ -945,7 +949,7 @@ static void open_external_files(struct MPContext *mpctx, char **files,
     for (int n = 0; files && files[n]; n++)
         // when given filter is set to video, we are loading up cover art
         mp_add_external_file(mpctx, files[n], filter, mpctx->playback_abort,
-                             filter == STREAM_VIDEO);
+                             filter == STREAM_VIDEO ? TRACK_ATTACHED_PICTURE : 0);
 
     talloc_free(tmp);
 }
@@ -985,9 +989,10 @@ void autoload_external_files(struct MPContext *mpctx, struct mp_cancel *cancel)
         if (e->type == STREAM_VIDEO && (sc[STREAM_VIDEO] || !sc[STREAM_AUDIO]))
             goto skip;
 
+        enum track_flags flags = e->flags;
         // when given filter is set to video, we are loading up cover art
-        int first = mp_add_external_file(mpctx, e->fname, e->type, cancel,
-                                         e->type == STREAM_VIDEO);
+        flags |= e->type == STREAM_VIDEO ? TRACK_ATTACHED_PICTURE : 0;
+        int first = mp_add_external_file(mpctx, e->fname, e->type, cancel, flags);
         if (first < 0)
             goto skip;
 
@@ -1080,7 +1085,10 @@ static void load_chapters(struct MPContext *mpctx)
     if (chapter_file && chapter_file[0]) {
         chapter_file = mp_get_user_path(NULL, mpctx->global, chapter_file);
         mp_core_unlock(mpctx);
-        struct demuxer_params p = {.stream_flags = STREAM_ORIGIN_DIRECT};
+        struct demuxer_params p = {
+            .stream_flags = STREAM_ORIGIN_DIRECT,
+            .depth = src ? src->depth + 1 : 0,
+        };
         struct demuxer *demux = demux_open_url(chapter_file, &p,
                                                mpctx->playback_abort,
                                                mpctx->global);
@@ -1546,8 +1554,10 @@ static void append_to_watch_history(struct MPContext *mpctx)
     void *ctx = talloc_new(NULL);
     char *history_path = mp_get_user_path(ctx, mpctx->global,
                                           mpctx->opts->watch_history_path);
-    FILE *history_file = fopen(history_path, "ab");
+    char *history_path_dir = bstrto0(ctx, mp_dirname(history_path));
+    mp_mkdirp(history_path_dir);
 
+    FILE *history_file = fopen(history_path, "ab");
     if (!history_file) {
         MP_ERR(mpctx, "Failed to open history file: %s\n",
                mp_strerror(errno));
@@ -1667,7 +1677,7 @@ static void play_current_file(struct MPContext *mpctx)
     reset_playback_state(mpctx);
 
 #ifdef FUZZING_BUILD_MODE_UNSAFE_FOR_PRODUCTION
-    if (mpctx->playlist->num_entries > 10)
+    if (mpctx->playlist->num_entries > 3)
         goto terminate_playback;
 #endif
 

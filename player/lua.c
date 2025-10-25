@@ -88,6 +88,12 @@ static const char * const builtin_lua_scripts[][2] = {
     {"@positioning.lua",
 #   include "player/lua/positioning.lua.inc"
     },
+    {"@commands.lua",
+#   include "player/lua/commands.lua.inc"
+    },
+    {"@context_menu.lua",
+#   include "player/lua/context_menu.lua.inc"
+    },
     {0}
 };
 
@@ -649,8 +655,7 @@ static int script_set_property_bool(lua_State *L)
 
 static bool is_int(double d)
 {
-    int64_t v = d;
-    return d == (double)v;
+    return d >= (double)INT64_MIN && d <= (double)INT64_MAX && d == (int64_t)d;
 }
 
 static int script_set_property_number(lua_State *L)

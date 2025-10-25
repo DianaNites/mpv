@@ -7,7 +7,6 @@ mpv provides the built-in module ``mp``, which contains functions to send
 commands to the mpv core and to retrieve information about playback state, user
 settings, file information, and so on.
 
-These scripts can be used to control mpv in a similar way to slave mode.
 Technically, the Lua code uses the client API internally.
 
 Example
@@ -175,7 +174,7 @@ The ``mp`` module is preloaded, although it can be loaded manually with
     as possible), and upon completion, fn is called. fn has three arguments:
     ``fn(success, result, error)``:
 
-         ``success``
+        ``success``
             Always a Boolean and is true if the command was successful,
             otherwise false.
 
@@ -446,7 +445,7 @@ The ``mp`` module is preloaded, although it can be loaded manually with
     the property will be passed as second argument to ``fn``, using
     ``mp.get_property_<type>`` to retrieve it. This means if ``type`` is for
     example ``string``, ``fn`` is roughly called as in
-    ``fn(name, mp.get_property_string(name))``.
+    ``fn(name, mp.get_property(name))``.
 
     If possible, change events are coalesced. If a property is changed a bunch
     of times in a row, only the last change triggers the change function. (The
@@ -491,6 +490,7 @@ The ``mp`` module is preloaded, although it can be loaded manually with
     the timer is re-added after the function fn is run.
 
     Returns a timer object. The timer object provides the following methods:
+
         ``stop()``
             Disable the timer. Does nothing if the timer is already disabled.
             This will remember the current elapsed time when stopping, so that
@@ -940,13 +940,19 @@ REPL.
         in the console.
 
     ``complete``
-        A callback invoked when the user presses TAB. The first argument is the
-        text before the cursor. The callback should return a table of the string
-        candidate completion values and the 1-based cursor position from which
-        the completion starts. console.lua will filter the suggestions beginning
-        with the the text between this position and the cursor, sort them
-        alphabetically, insert their longest common prefix, and show them when
-        there are multiple ones.
+        A callback invoked when the user edits the text or moves the cursor. The
+        first argument is the text before the cursor. The callback should return
+        a table of the string candidate completion values and the 1-based cursor
+        position from which the completion starts. console will show the
+        completions that fuzzily match the text between this position and the
+        cursor and allow selecting them.
+
+        The third and optional return value is a string that will be appended to
+        the input line without displaying it in the completions.
+
+    ``autoselect_completion``
+        Whether to automatically select the first completion on submit if one
+        wasn't already manually selected. Defaults to ``false``.
 
     ``closed``
         A callback invoked when the console is hidden, either because
@@ -960,12 +966,14 @@ REPL.
     ``cursor_position``
         The initial cursor position, starting from 1.
 
+    ``history_path``
+        If specified, the path to save and load the history of the entered
+        lines.
+
     ``id``
         An identifier that determines which input history and log buffer to use
-        among the ones stored for ``input.get()`` calls. The input histories
-        and logs are stored in memory and do not persist across different mpv
-        invocations. Defaults to the calling script name with ``prompt``
-        appended.
+        among the ones stored for ``input.get()`` calls. Defaults to the calling
+        script name with ``prompt`` appended.
 
 ``input.terminate()``
     Close the console.
@@ -976,8 +984,8 @@ REPL.
     that are used when the console is displayed in the terminal.
 
 ``input.log_error(message)``
-    Helper to add a line to the log buffer with the same color as the one the
-    console uses for errors. Useful when the user submits invalid input.
+    Helper to add a line to the log buffer with the same color as the one used
+    for commands that error. Useful when the user submits invalid input.
 
 ``input.set_log(log)``
     Replace the entire log buffer.

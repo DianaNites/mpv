@@ -69,11 +69,10 @@ extern const struct vo_driver video_out_kitty;
 
 static const struct vo_driver *const video_out_drivers[] =
 {
-#if HAVE_ANDROID
-    &video_out_mediacodec_embed,
-#endif
-    &video_out_gpu,
+    // high-quality and well-supported VOs first:
     &video_out_gpu_next,
+    &video_out_gpu,
+
 #if HAVE_VDPAU
     &video_out_vdpau,
 #endif
@@ -85,6 +84,9 @@ static const struct vo_driver *const video_out_drivers[] =
 #endif
 #if HAVE_XV
     &video_out_xv,
+#endif
+#if HAVE_ANDROID
+    &video_out_mediacodec_embed,
 #endif
 #if HAVE_SDL2_VIDEO
     &video_out_sdl,
@@ -100,6 +102,7 @@ static const struct vo_driver *const video_out_drivers[] =
 #endif
     &video_out_libmpv,
     &video_out_null,
+
     // should not be auto-selected
     &video_out_image,
     &video_out_tct,
@@ -579,6 +582,9 @@ static void check_vo_caps(struct vo *vo)
                    "video output does not support this.\n", rot);
         }
     }
+    if (vo->params->vflip && !(vo->driver->caps & VO_CAP_VFLIP))
+        MP_WARN(vo, "Video is flagged as vertically flipped, but the "
+                    "video output does not support this.\n");
 }
 
 static void run_reconfig(void *p)
@@ -835,9 +841,7 @@ bool vo_is_ready_for_frame(struct vo *vo, int64_t next_pts)
 {
     struct vo_internal *in = vo->in;
     mp_mutex_lock(&in->lock);
-    bool blocked = vo->driver->initially_blocked &&
-                   !(in->internal_events & VO_EVENT_INITIAL_UNBLOCK);
-    bool r = vo->config_ok && !in->frame_queued && !blocked &&
+    bool r = vo->config_ok && !in->frame_queued &&
              (!in->current_frame || in->current_frame->num_vsyncs < 1);
     if (r && next_pts >= 0) {
         // Don't show the frame too early - it would basically freeze the
@@ -1076,12 +1080,17 @@ static void do_redraw(struct vo *vo)
 {
     struct vo_internal *in = vo->in;
 
-    if (!vo->config_ok || (vo->driver->caps & VO_CAP_NORETAIN) ||
-        (vo->driver->caps & VO_CAP_UNTIMED))
+    if (!vo->config_ok)
         return;
 
     mp_mutex_lock(&in->lock);
     in->request_redraw = false;
+
+    if (vo->driver->caps & (VO_CAP_NORETAIN | VO_CAP_UNTIMED)) {
+        mp_mutex_unlock(&in->lock);
+        return;
+    }
+
     bool full_redraw = in->dropped_frame;
     struct vo_frame *frame = vo_frame_ref(in->current_frame);
     if (frame)
@@ -1404,6 +1413,11 @@ double vo_get_display_fps(struct vo *vo)
     double res = vo->in->display_fps;
     mp_mutex_unlock(&in->lock);
     return res;
+}
+
+void * vo_get_display_swapchain(struct vo *vo)
+{
+    return vo->display_swapchain;
 }
 
 // Set specific event flags, and wakeup the playback core if needed.

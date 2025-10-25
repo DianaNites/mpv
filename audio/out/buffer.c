@@ -56,7 +56,6 @@ struct buffer_state {
     struct mp_filter *input;    // connected to queue
     struct mp_aframe *pending;  // last, not fully consumed output
 
-    bool got_eof;               // received eof in recent past
     bool streaming;             // AO streaming active
     bool playing;               // logically playing audio from buffer
     bool paused;                // logically paused
@@ -68,8 +67,6 @@ struct buffer_state {
                                 // This field is only set in ao_set_paused(),
                                 // and is considered as a temporary solution;
                                 // DO NOT USE IT IN OTHER PLACES.
-
-    bool initial_unblocked;
 
     // "Push" AOs only (AOs with driver->write).
     bool recover_pause;         // non-hw_paused: needs to recover delay
@@ -683,19 +680,13 @@ static bool ao_play_data(struct ao *ao)
             p->streaming = true;
             state.playing = true;
         }
-    } else if (p->streaming && p->got_eof && !samples) {
-        p->got_eof = false;
-        state.playing = false;
-        goto eof;
     }
 
     MP_TRACE(ao, "in=%d space=%d(%d) pl=%d, eof=%d\n",
              samples, space, state.free_samples, p->playing, got_eof);
 
-    if (got_eof) {
-        p->got_eof = got_eof;
+    if (got_eof)
         goto eof;
-    }
 
     return samples > 0 && (samples < space || ao->untimed);
 
@@ -720,9 +711,7 @@ static MP_THREAD_VOID ao_thread(void *arg)
     while (1) {
         mp_mutex_lock(&p->lock);
 
-        bool retry = false;
-        if (!ao->driver->initially_blocked || p->initial_unblocked)
-            retry = ao_play_data(ao);
+        bool retry = ao_play_data(ao);
 
         // Wait until the device wants us to write more data to it.
         // Fallback to guessing.
@@ -750,15 +739,4 @@ static MP_THREAD_VOID ao_thread(void *arg)
         mp_mutex_unlock(&p->pt_lock);
     }
     MP_THREAD_RETURN();
-}
-
-void ao_unblock(struct ao *ao)
-{
-    if (ao->driver->write) {
-        struct buffer_state *p = ao->buffer_state;
-        mp_mutex_lock(&p->lock);
-        p->initial_unblocked = true;
-        mp_mutex_unlock(&p->lock);
-        ao_wakeup(ao);
-    }
 }

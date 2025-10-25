@@ -393,6 +393,9 @@ static const struct gl_video_opts gl_video_opts_def = {
     .interpolation_threshold = 0.01,
     .background = BACKGROUND_TILES,
     .background_color = {0, 0, 0, 255},
+    .background_tile_color = {{237, 237, 237, 255},
+                              {222, 222, 222, 255}},
+    .background_tile_size = 16,
     .gamma = 1.0f,
     .tone_map = {
         .curve = TONE_MAPPING_AUTO,
@@ -440,8 +443,10 @@ const struct m_sub_options gl_video_conf = {
         {"target-trc", OPT_CHOICE_C(target_trc, pl_csp_trc_names)},
         {"target-peak", OPT_CHOICE(target_peak, {"auto", 0}),
             M_RANGE(10, 10000)},
+        {"hdr-reference-white", OPT_CHOICE(hdr_reference_white, {"auto", 0}),
+            M_RANGE(10, 10000)},
         {"target-contrast", OPT_CHOICE(target_contrast, {"auto", 0}, {"inf", -1}),
-            M_RANGE(10, 1000000)},
+            M_RANGE(10, 10 / PL_COLOR_HDR_BLACK)},
         {"target-gamut", OPT_CHOICE_C(target_gamut, pl_csp_prim_names)},
         {"tone-mapping", OPT_CHOICE(tone_map.curve,
             {"auto",     TONE_MAPPING_AUTO},
@@ -524,6 +529,9 @@ const struct m_sub_options gl_video_conf = {
             {"tiles", BACKGROUND_TILES})},
         {"opengl-rectangle-textures", OPT_BOOL(use_rectangle)},
         {"background-color", OPT_COLOR(background_color)},
+        {"background-tile-color-0", OPT_COLOR(background_tile_color[0])},
+        {"background-tile-color-1", OPT_COLOR(background_tile_color[1])},
+        {"background-tile-size", OPT_INT(background_tile_size), M_RANGE(1, 4096)},
         {"interpolation", OPT_BOOL(interpolation)},
         {"interpolation-threshold", OPT_FLOAT(interpolation_threshold)},
         {"blend-subtitles", OPT_CHOICE(blend_subs,
@@ -1141,7 +1149,7 @@ static void pass_record(struct gl_video *p, const struct mp_pass_perf *perf)
     p->pass_idx++;
 }
 
-PRINTF_ATTRIBUTE(2, 3)
+MP_PRINTF_ATTRIBUTE(2, 3)
 static void pass_describe(struct gl_video *p, const char *textf, ...)
 {
     if (!p->pass || p->pass_idx == VO_PASS_PERF_MAX)
@@ -1390,7 +1398,9 @@ static const char *get_tex_swizzle(struct image *img)
 {
     if (!img->tex)
         return "rgba";
-    return img->tex->params.format->luminance_alpha ? "raaa" : "rgba";
+    if (img->tex->params.format->luminance_alpha)
+        return "raaa";
+    return img->tex->params.format->ordered ? "rgba" : "bgra";
 }
 
 // Copy a texture to the vec4 color, while increasing offset. Also applies
@@ -3166,11 +3176,15 @@ static void pass_draw_to_screen(struct gl_video *p, const struct ra_fbo *fbo, in
     if (p->has_alpha) {
         if (p->opts.background == BACKGROUND_TILES) {
             // Draw checkerboard pattern to indicate transparency
+            struct m_color *c = p->opts.background_tile_color;
             GLSLF("// transparency checkerboard\n");
-            GLSLF("vec2 tile_coord = vec2(gl_FragCoord.x, %d.0 + %f * gl_FragCoord.y);",
+            GLSLF("vec2 tile_coord = vec2(gl_FragCoord.x, %d.0 + %f * gl_FragCoord.y);\n",
                   fbo->flip ? fbo->tex->params.h : 0, fbo->flip ? -1.0 : 1.0);
-            GLSL(bvec2 tile = lessThan(fract(tile_coord * 1.0 / 32.0), vec2(0.5));)
-            GLSL(vec3 background = vec3(tile.x == tile.y ? 0.93 : 0.87);)
+            GLSLF("bvec2 tile = lessThan(fract(tile_coord * 1.0 / %d.0), vec2(0.5));\n",
+                  p->opts.background_tile_size * 2);
+            GLSLF("vec3 background = tile.x == tile.y ? vec3(%f, %f, %f) : vec3(%f, %f, %f);\n",
+                  c[0].r / 255.0, c[0].g / 255.0, c[0].b / 255.0,
+                  c[1].r / 255.0, c[1].g / 255.0, c[1].b / 255.0);
             GLSL(color.rgb += background.rgb * (1.0 - color.a);)
             GLSL(color.a = 1.0;)
         } else if (p->opts.background == BACKGROUND_COLOR) {
@@ -3467,7 +3481,8 @@ void gl_video_render_frame(struct gl_video *p, struct vo_frame *frame,
                                       fbo->tex->params.w, fbo->tex->params.h,
                                       fmt);
                 }
-                const struct ra_fbo *dest_fbo = r ? &(struct ra_fbo) { p->output_tex } : fbo;
+                const struct ra_fbo *dest_fbo =
+                    r ? &(struct ra_fbo) { .tex = p->output_tex, .color_space = fbo->color_space } : fbo;
                 p->output_tex_valid = r;
                 pass_draw_to_screen(p, dest_fbo, flags);
             }
@@ -3735,6 +3750,7 @@ static bool pass_upload_image(struct gl_video *p, struct mp_image *mpi, uint64_t
                     .w = mp_image_plane_w(&layout, n),
                     .h = mp_image_plane_h(&layout, n),
                     .tex = tex[n],
+                    .flipped = layout.params.vflip,
                 };
             }
         } else {
@@ -3748,6 +3764,10 @@ static bool pass_upload_image(struct gl_video *p, struct mp_image *mpi, uint64_t
     mp_assert(mpi->num_planes == p->plane_count);
 
     timer_pool_start(p->upload_timer);
+
+    if (mpi->params.vflip)
+        mp_image_vflip(mpi);
+
     for (int n = 0; n < p->plane_count; n++) {
         struct texplane *plane = &vimg->planes[n];
         if (!plane->tex) {
@@ -3962,6 +3982,9 @@ static void check_gl_features(struct gl_video *p)
             .background = p->opts.background,
             .use_rectangle = p->opts.use_rectangle,
             .background_color = p->opts.background_color,
+            .background_tile_color[0] = p->opts.background_tile_color[0],
+            .background_tile_color[1] = p->opts.background_tile_color[1],
+            .background_tile_size = p->opts.background_tile_size,
             .dither_algo = p->opts.dither_algo,
             .dither_depth = p->opts.dither_depth,
             .dither_size = p->opts.dither_size,

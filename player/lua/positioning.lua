@@ -27,6 +27,11 @@ local function clamp(value, min, max)
 end
 
 mp.add_key_binding(nil, "pan-x", function (t)
+    if t.arg == nil or t.arg == "" then
+        mp.osd_message("Usage: script-binding positioning/pan-x <amount>")
+        return
+    end
+
     if t.event == "up" then
         return
     end
@@ -42,6 +47,11 @@ mp.add_key_binding(nil, "pan-x", function (t)
 end, { complex = true, scalable = true })
 
 mp.add_key_binding(nil, "pan-y", function (t)
+    if t.arg == nil or t.arg == "" then
+        mp.osd_message("Usage: script-binding positioning/pan-y <amount>")
+        return
+    end
+
     if t.event == "up" then
         return
     end
@@ -83,8 +93,10 @@ local align_to_cursor_bound = false
 
 local function align_to_cursor(_, mouse_pos)
     local dims = mp.get_property_native("osd-dimensions")
-    mp.set_property("video-align-x", (mouse_pos.x * 2 - dims.w) / dims.w)
-    mp.set_property("video-align-y", (mouse_pos.y * 2 - dims.h) / dims.h)
+    local align = (mouse_pos.x * 2 - dims.w) / dims.w
+    mp.set_property("video-align-x", clamp(align, -1, 1))
+    align = (mouse_pos.y * 2 - dims.h) / dims.h
+    mp.set_property("video-align-y", clamp(align, -1, 1))
 end
 
 mp.add_key_binding(nil, "align-to-cursor", function (t)
@@ -112,6 +124,11 @@ end, { complex = true })
 
 
 mp.add_key_binding(nil, "cursor-centric-zoom", function (t)
+    if t.arg == nil or t.arg == "" then
+        mp.osd_message("Usage: script-binding positioning/cursor-centric-zoom <amount>")
+        return
+    end
+
     local amount = t.arg * t.scale
 
     local command = (options.suppress_osd and "no-osd " or "") ..
